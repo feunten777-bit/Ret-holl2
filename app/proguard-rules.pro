@@ -1,0 +1,1 @@
+# Aucun réglage ProGuard particulier.
