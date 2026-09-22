@@ -46,16 +46,18 @@ public class MainActivity extends Activity implements RecognitionListener {
     private String textBeforePartial = "";
     private String latestPartial = "";
     private int consecutiveErrors = 0;
-    private boolean compatibilityMode = false;
+    private boolean compatibilityMode = true;
 
     @Override
     protected void onCreate(Bundle state) {
         super.onCreate(state);
         buildInterface();
+        // Sur certains Huawei Android 10, SpeechRecognizer reste occupé ou ne
+        // retourne aucun mot. Le mode système est donc utilisé directement.
         prepareRecognizer();
 
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
-            startListening();
+            handler.postDelayed(this::startCompatibilityListening, 500);
         } else {
             requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, AUDIO_PERMISSION);
         }
@@ -132,13 +134,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     }
 
     private void prepareRecognizer() {
-        if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-            status.setText("Reconnaissance vocale indisponible sur ce téléphone.");
-            return;
-        }
-        recognizer = SpeechRecognizer.createSpeechRecognizer(this);
-        recognizer.setRecognitionListener(this);
-
+        // Intent conservé pour compatibilité, sans lancer le moteur direct.
         recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL,
                 RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
@@ -465,7 +461,7 @@ public class MainActivity extends Activity implements RecognitionListener {
         super.onRequestPermissionsResult(requestCode, permissions, grants);
         if (requestCode == AUDIO_PERMISSION && grants.length > 0 &&
                 grants[0] == PackageManager.PERMISSION_GRANTED) {
-            startListening();
+            handler.postDelayed(this::startCompatibilityListening, 500);
         } else {
             status.setText("Le microphone est nécessaire pour écrire.");
             startButton.setText("Démarrer");
