@@ -43,6 +43,8 @@ public class MainActivity extends Activity implements RecognitionListener {
     private boolean listening = false;
     private boolean userStopped = false;
     private String textBeforePartial = "";
+    private String latestPartial = "";
+    private int consecutiveErrors = 0;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -150,6 +152,7 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (recognizer == null || recognizerIntent == null || isFinishing()) return;
         handler.removeCallbacksAndMessages(null);
         textBeforePartial = editor.getText().toString();
+        latestPartial = "";
         try {
             recognizer.startListening(recognizerIntent);
             listening = true;
@@ -186,6 +189,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     }
 
     private void showPartial(String words) {
+        latestPartial = words;
         editor.setText(textBeforePartial + (textBeforePartial.isEmpty() ? "" : " ") + words);
         editor.setSelection(editor.length());
     }
@@ -339,20 +343,52 @@ public class MainActivity extends Activity implements RecognitionListener {
     @Override
     public void onError(int error) {
         if (userStopped) return;
-        editor.setText(textBeforePartial);
-        editor.setSelection(editor.length());
-        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
-            status.setText("Autorisez le microphone dans les paramètres.");
+
+        // Certains téléphones Huawei fournissent seulement un résultat provisoire,
+        // puis terminent par NO_MATCH. On conserve ce résultat au lieu de l'effacer.
+        if (!latestPartial.isEmpty()) {
+            acceptFinal(latestPartial);
+            latestPartial = "";
+            textBeforePartial = editor.getText().toString();
+            consecutiveErrors = 0;
+            status.setText("Texte ajouté — reprise du micro…");
+            scheduleRestart(700);
             return;
         }
-        status.setText("🎤 Reprise de l’écoute…");
-        scheduleRestart(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1200 : 500);
+
+        editor.setText(textBeforePartial);
+        editor.setSelection(editor.length());
+        consecutiveErrors++;
+
+        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
+            status.setText("Micro non autorisé : ouvrez Paramètres > Applications > Autorisations.");
+            startButton.setText("Démarrer");
+            return;
+        }
+
+        String detail;
+        switch (error) {
+            case SpeechRecognizer.ERROR_AUDIO: detail = "erreur audio"; break;
+            case SpeechRecognizer.ERROR_CLIENT: detail = "moteur vocal bloqué"; break;
+            case SpeechRecognizer.ERROR_NETWORK:
+            case SpeechRecognizer.ERROR_NETWORK_TIMEOUT: detail = "connexion nécessaire"; break;
+            case SpeechRecognizer.ERROR_NO_MATCH: detail = "parole non reconnue"; break;
+            case SpeechRecognizer.ERROR_RECOGNIZER_BUSY: detail = "moteur occupé"; break;
+            case SpeechRecognizer.ERROR_SERVER: detail = "service vocal indisponible"; break;
+            case SpeechRecognizer.ERROR_SPEECH_TIMEOUT: detail = "aucune parole détectée"; break;
+            default: detail = "erreur " + error;
+        }
+        status.setText("⚠ " + detail + " — nouvel essai…");
+        scheduleRestart(error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 1600 : 1000);
     }
 
     @Override
     public void onResults(Bundle results) {
         String words = firstResult(results);
+        if (words.isEmpty()) words = latestPartial;
         acceptFinal(words);
+        latestPartial = "";
+        consecutiveErrors = 0;
         textBeforePartial = editor.getText().toString();
         status.setText("Texte ajouté — reprise du micro…");
         scheduleRestart(400);
@@ -360,7 +396,10 @@ public class MainActivity extends Activity implements RecognitionListener {
 
     @Override public void onPartialResults(Bundle partialResults) {
         String words = firstResult(partialResults);
-        if (!words.isEmpty()) showPartial(words);
+        if (!words.isEmpty()) {
+            consecutiveErrors = 0;
+            showPartial(words);
+        }
     }
     @Override public void onEvent(int eventType, Bundle params) { }
 
