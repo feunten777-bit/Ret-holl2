@@ -31,6 +31,7 @@ import java.util.Locale;
 
 public class MainActivity extends Activity implements RecognitionListener {
     private static final int AUDIO_PERMISSION = 77;
+    private static final int COMPAT_SPEECH = 88;
 
     private SpeechRecognizer recognizer;
     private Intent recognizerIntent;
@@ -45,6 +46,7 @@ public class MainActivity extends Activity implements RecognitionListener {
     private String textBeforePartial = "";
     private String latestPartial = "";
     private int consecutiveErrors = 0;
+    private boolean compatibilityMode = false;
 
     @Override
     protected void onCreate(Bundle state) {
@@ -100,7 +102,7 @@ public class MainActivity extends Activity implements RecognitionListener {
         startButton.setOnClickListener(v -> {
             if (listening) stopByUser(); else {
                 userStopped = false;
-                startListening();
+                if (compatibilityMode) startCompatibilityListening(); else startListening();
             }
         });
         buttons.addView(startButton, new LinearLayout.LayoutParams(0, dp(52), 1f));
@@ -165,6 +167,29 @@ public class MainActivity extends Activity implements RecognitionListener {
         }
     }
 
+    private void startCompatibilityListening() {
+        if (isFinishing()) return;
+        compatibilityMode = true;
+        listening = true;
+        startButton.setText("Arrêter");
+        status.setText("🎤 Mode compatible — parlez");
+
+        if (recognizer != null) recognizer.cancel();
+
+        Intent voice = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        voice.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+        voice.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "fr-FR");
+        voice.putExtra(RecognizerIntent.EXTRA_PROMPT, "Parlez maintenant");
+        voice.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
+        try {
+            startActivityForResult(voice, COMPAT_SPEECH);
+        } catch (Exception e) {
+            listening = false;
+            startButton.setText("Démarrer");
+            status.setText("Aucun service de saisie vocale installé.");
+        }
+    }
+
     private void stopByUser() {
         userStopped = true;
         listening = false;
@@ -173,6 +198,30 @@ public class MainActivity extends Activity implements RecognitionListener {
         editor.setSelection(editor.length());
         startButton.setText("Démarrer");
         status.setText("Micro arrêté");
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != COMPAT_SPEECH) return;
+
+        listening = false;
+        if (resultCode == RESULT_OK && data != null) {
+            ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
+            String words = (results == null || results.isEmpty()) ? "" : results.get(0).trim();
+            if (!words.isEmpty()) {
+                textBeforePartial = editor.getText().toString();
+                acceptFinal(words);
+                textBeforePartial = editor.getText().toString();
+                status.setText("Texte ajouté — reprise du micro…");
+                if (!userStopped) handler.postDelayed(this::startCompatibilityListening, 700);
+                return;
+            }
+        }
+
+        userStopped = true;
+        startButton.setText("Démarrer");
+        status.setText("Écoute arrêtée — touchez Démarrer");
     }
 
     private void scheduleRestart(long delay) {
@@ -363,6 +412,14 @@ public class MainActivity extends Activity implements RecognitionListener {
         if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
             status.setText("Micro non autorisé : ouvrez Paramètres > Applications > Autorisations.");
             startButton.setText("Démarrer");
+            return;
+        }
+
+        // Après deux échecs sans aucun mot, utiliser l'interface vocale
+        // du téléphone, plus fiable sur certains Huawei Android 10.
+        if (error == SpeechRecognizer.ERROR_NO_MATCH && consecutiveErrors >= 2) {
+            status.setText("Passage au mode compatible…");
+            handler.postDelayed(this::startCompatibilityListening, 600);
             return;
         }
 
